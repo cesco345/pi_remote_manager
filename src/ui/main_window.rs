@@ -2,7 +2,7 @@
 pub mod main_window {
     use fltk::{
         app,
-        enums::{Color, FrameType, Shortcut},
+        enums::Shortcut,
         menu::{MenuBar, MenuFlag},
         group::{Group, Tabs},
         window::Window,
@@ -17,8 +17,8 @@ pub mod main_window {
         JPEGProcessorFactory,
         PNGProcessorFactory,
     };
-    use crate::transfer::ssh::ssh::SSHTransferFactory;
-    use crate::transfer::ssh::ssh::RsyncTransferFactory;
+    
+    
 
     use crate::config::Config;
     
@@ -66,7 +66,7 @@ pub mod main_window {
             let content_height = height - content_y;
             
             // Create tabs
-            let mut tabs = Tabs::new(0, content_y, width, content_height, "");
+            let tabs = Tabs::new(0, content_y, width, content_height, "");
             
             // Add tabs
             tabs.begin();
@@ -92,7 +92,7 @@ pub mod main_window {
             );
             
             // Create remote file browser panel (right side)
-            let mut remote_browser = FileBrowserPanel::new(
+            let remote_browser = FileBrowserPanel::new(
                 panel_width + 10, 
                 content_y + 35, 
                 panel_width, 
@@ -100,7 +100,7 @@ pub mod main_window {
                 "Raspberry Pi Files"
             );
             
-            let mut transfer_panel = TransferPanel::new(
+            let transfer_panel = TransferPanel::new(
                 0,
                 content_y + 35 + browser_height + 5,
                 width,
@@ -116,7 +116,7 @@ pub mod main_window {
             
             // Create image view panel (left side)
             let image_view_width = (width * 2) / 3;
-            let mut image_view = ImageViewPanel::new(
+            let image_view = ImageViewPanel::new(
                 0,
                 content_y + 35,
                 image_view_width,
@@ -125,7 +125,7 @@ pub mod main_window {
             
             // Create operations panel (right side)
             let operations_width = width - image_view_width - 5;
-            let mut operations_panel = OperationsPanel::new(
+            let operations_panel = OperationsPanel::new(
                 image_view_width + 5,
                 content_y + 35,
                 operations_width,

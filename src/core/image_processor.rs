@@ -1,6 +1,6 @@
 // core/image_processor.rs - Image processor implementation
 pub mod image_processor {
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
     use std::error::Error;
     use std::fmt;
     

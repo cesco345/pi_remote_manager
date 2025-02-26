@@ -6,7 +6,7 @@ mod transfer;
 mod config;
 mod utils;
 
-use fltk::{app, window::Window};
+use fltk::app;
 use crate::ui::main_window::main_window::MainWindow;
 use crate::config::Config;
 

@@ -1,10 +1,9 @@
 // src/ui/file_browser.rs - File browser panel
 pub mod file_browser {
     use fltk::{
-        app,
         browser::HoldBrowser,
         button::Button,
-        enums::{Color, FrameType, Shortcut},
+        enums::FrameType,
         group::Group,
         input::Input,
         prelude::*,
@@ -58,7 +57,7 @@ pub mod file_browser {
             
             // Path input and refresh button
             let input_y = y + padding + title_h + padding;
-            let mut path_input = Input::new(
+            let path_input = Input::new(
                 x + padding, 
                 input_y, 
                 w - 70 - 2 * padding, 
@@ -66,7 +65,7 @@ pub mod file_browser {
                 None
             );
             
-            let mut refresh_button = Button::new(
+            let refresh_button = Button::new(
                 x + w - 70 - padding, 
                 input_y, 
                 70, 
@@ -78,7 +77,7 @@ pub mod file_browser {
             let browser_y = input_y + row_height + padding;
             let browser_h = h - (browser_y - y) - padding;
             
-            let mut file_browser = HoldBrowser::new(
+            let file_browser = HoldBrowser::new(
                 x + padding, 
                 browser_y, 
                 w - 2 * padding, 

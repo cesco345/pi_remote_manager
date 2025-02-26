@@ -5,7 +5,6 @@ pub mod image_view {
         group::Group,
         image::{JpegImage, PngImage},
         prelude::*,
-        widget::Widget,
     };
     
     use std::path::{Path, PathBuf};

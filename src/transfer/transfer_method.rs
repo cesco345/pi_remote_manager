@@ -1,6 +1,6 @@
 // src/transfer/transfer_method.rs - File transfer method trait and implementations
 pub mod transfer_method {
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
     use std::error::Error;
     use std::fmt;
     

@@ -8,15 +8,12 @@ pub mod transfer_panel {
         prelude::*,
     };
     
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
     
     use crate::config::Config;
 
-    use crate::transfer::ssh::ssh::{
-        SSHTransferFactory,
-        RsyncTransferFactory,
-    };
+    use crate::transfer::ssh::ssh::SSHTransferFactory;
     use crate::transfer::transfer_method::transfer_method::{
         TransferMethod,
         TransferMethodFactory,
@@ -90,7 +87,7 @@ pub mod transfer_panel {
             );
             source_label.set_align(fltk::enums::Align::Inside | fltk::enums::Align::Left);
             
-            let mut source_input = Input::new(
+            let source_input = Input::new(
                 x + padding + label_width,
                 row1_y,
                 input_width,
@@ -98,7 +95,7 @@ pub mod transfer_panel {
                 None
             );
             
-            let mut direction_button = Button::new(
+            let direction_button = Button::new(
                 x + padding + label_width + input_width + padding,
                 row1_y,
                 button_width,
@@ -117,7 +114,7 @@ pub mod transfer_panel {
             );
             dest_label.set_align(fltk::enums::Align::Inside | fltk::enums::Align::Left);
             
-            let mut dest_input = Input::new(
+            let dest_input = Input::new(
                 x + padding + label_width,
                 row2_y,
                 input_width,

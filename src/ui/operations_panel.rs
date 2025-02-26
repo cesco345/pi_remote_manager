@@ -4,7 +4,7 @@ pub mod operations_panel {
         browser::MultiBrowser,
         button::Button,
         enums::{Color, FrameType},
-        group::{Group, Scroll, Pack},
+        group::Group,
         prelude::*,
     };
     
