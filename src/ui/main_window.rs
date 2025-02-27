@@ -8,7 +8,9 @@ pub mod main_window {
         window::Window,
         prelude::*,
     };
-    // Removed unused import: fltk::dialog::password
+    // Added imports for temporary file handling
+    use std::env;
+    use std::fs;
     
     use std::sync::{Arc, Mutex};
     use std::path::{Path, PathBuf};
@@ -21,7 +23,6 @@ pub mod main_window {
     
     use crate::config::Config;
     use crate::transfer::ssh::SSHTransferFactory;
-    // Removed unused import: crate::transfer::ssh::SSHTransfer
     
     use crate::ui::file_browser::file_browser::FileBrowserPanel;
     use crate::ui::image_view::image_view::ImageViewPanel;
@@ -29,18 +30,6 @@ pub mod main_window {
     use crate::ui::transfer_panel::transfer_panel::TransferPanel;
     use crate::transfer::method::TransferMethodFactory;
     use crate::ui::dialogs::dialogs;
-    
-    // Helper function to check for image file extensions
-    fn is_image_file(path: &Path) -> bool {
-        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-            matches!(
-                ext.to_lowercase().as_str(),
-                "jpg" | "jpeg" | "png" | "gif" | "bmp" | "tiff" | "tif" | "webp"
-            )
-        } else {
-            false
-        }
-    }
     
     pub struct MainWindow {
         window: Window,
@@ -52,6 +41,8 @@ pub mod main_window {
         image_view: ImageViewPanel,
         operations_panel: OperationsPanel,
         transfer_panel: TransferPanel,
+        // Added for temporary file management
+        temp_dir: PathBuf,
     }
     
     impl MainWindow {
@@ -157,6 +148,15 @@ pub mod main_window {
             let default_dir = config.lock().unwrap().default_local_dir.clone();
             local_browser.set_directory(&PathBuf::from(&default_dir));
             
+            // Setup temp directory for remote file previews
+            let mut temp_dir = env::temp_dir();
+            temp_dir.push("pi_image_processor_preview");
+            
+            // Create the temp directory if it doesn't exist
+            if !temp_dir.exists() {
+                let _ = fs::create_dir_all(&temp_dir);
+            }
+            
             // Finish the window
             window.end();
             window.make_resizable(true);
@@ -171,6 +171,7 @@ pub mod main_window {
                 image_view,
                 operations_panel,
                 transfer_panel,
+                temp_dir,
             };
             
             // Create a shared reference to the image view
@@ -531,18 +532,17 @@ pub mod main_window {
             content_y: i32, 
             image_view: Arc<Mutex<ImageViewPanel>>
         ) {
-            // Clone for local browser
+            // Clone references for thread safety
             let local_browser = Arc::new(Mutex::new(self.local_browser.clone()));
-            
-            // Use the existing remote browser reference
             let remote_browser_clone = self.remote_browser_ref.clone();
+            let temp_dir = self.temp_dir.clone();
             
             // Add a callback for tab selection
             let mut tabs_callback = tabs.clone();
             let image_view_tab_clone = image_view.clone();
             
             tabs.set_callback(move |tabs| {
-                // Get the currently selected tab and its label
+                // Find which tab is selected by checking all child groups
                 if let Some(tab) = tabs.value() {
                     // The label() method returns a String, not an Option<String>
                     let label = tab.label();
@@ -566,13 +566,14 @@ pub mod main_window {
             
             // Window resize callback
             let mut window_clone = self.window.clone();
-            window_clone.resize_callback(move |_, x, y, w, h| {
+            window_clone.resize_callback(move |_, _x, _y, w, h| {
                 // Update the tabs size when the window is resized
                 tabs_callback.resize(0, content_y, w, h - content_y);
                 app::redraw();
             });
             
             // Connect the transfer panel with file browsers
+            let temp_dir_clone = temp_dir.clone();
             self.transfer_panel.set_callback(move |source_is_local, source_path, dest_path| {
                 if source_is_local {
                     // Upload from local to remote
@@ -617,7 +618,7 @@ pub mod main_window {
                     }
                     
                     // Check if file is an image and preview it
-                    if is_image_file(&path) {
+                    if FileBrowserPanel::is_image_file(&path) {
                         println!("Loading image for preview: {}", path.display());
                         if let Ok(mut view) = image_view_clone.lock() {
                             if view.load_image(&path) {
@@ -634,46 +635,65 @@ pub mod main_window {
             let transfer_panel_clone = transfer_panel.clone();
             let remote_browser_clone = self.remote_browser_ref.clone();
             let image_view_clone = image_view.clone();
+            let temp_dir_clone = temp_dir.clone();
             
-            // First get a lock on the remote browser to set its callback
-            if let Ok(mut remote_browser) = remote_browser_clone.lock() {
-                remote_browser.set_callback(move |path, is_dir| {
-                    if !is_dir {
-                        println!("Remote file selected: {}", path.display());
-                        
-                        // Set source path for transfer
-                        if let Ok(mut panel) = transfer_panel_clone.lock() {
-                            panel.set_source_path(path.clone(), false);
-                        }
-                        
-                        // For remote files, we need to download them first before preview
-                        if is_image_file(&path) {
-                            println!("Selected a remote image: {}", path.display());
-                            // Check if we have a local version of this file already
-                            if path.exists() {
-                                println!("Image exists locally, loading for preview");
-                                if let Ok(mut view) = image_view_clone.lock() {
-                                    if view.load_image(&path) {
-                                        println!("Successfully loaded remote image preview");
-                                    } else {
-                                        println!("Failed to load remote image preview");
-                                    }
-                                }
-                            } else {
-                                println!("Remote image not available locally for preview");
-                                // You would need to implement a temporary download function here
-                                // to fetch the file for preview
-                            }
-                        }
-                    }
-                });
-            } else {
-                println!("ERROR: Could not lock remote browser to set callback");
+// First get a lock on the remote browser to set its callback
+if let Ok(mut remote_browser) = remote_browser_clone.lock() {
+    // Create a new clone for use inside the closure
+    let inner_remote_browser_clone = self.remote_browser_ref.clone();
+    
+    remote_browser.set_callback(move |path, is_dir| {
+        if !is_dir {
+            println!("Remote file selected: {}", path.display());
+            
+            // Set source path for transfer
+            if let Ok(mut panel) = transfer_panel_clone.lock() {
+                panel.set_source_path(path.clone(), false);
             }
             
+            // Check if it's an image file
+            if FileBrowserPanel::is_image_file(&path) {
+                // For remote files, check if they exist locally first
+                if path.exists() {
+                    // File exists locally, preview it directly
+                    println!("File exists locally, loading for preview");
+                    if let Ok(mut view) = image_view_clone.lock() {
+                        if view.load_image(&path) {
+                            println!("Successfully loaded remote image preview");
+                        } else {
+                            println!("Failed to load remote image preview");
+                        }
+                    }
+                } else {
+                    // Need to download the file to a temporary location for preview
+                    println!("Remote file not available locally, downloading for preview");
+                    
+                    // Create a path in the temp directory
+                    let mut temp_file = temp_dir_clone.clone();
+                    if let Some(file_name) = path.file_name() {
+                        temp_file.push(file_name);
+                        
+                        // Use the browser to download the file - use inner_remote_browser_clone here
+                        if let Ok(browser) = inner_remote_browser_clone.lock() {
+                            match browser.download_remote_file(&path, &temp_file) {
+                                
+                               Ok(_) | Err(_) => todo!(),
+                          }
+                                
+                            }
+                        
+                    }
+                }
+            }
+        }
+    });
+} else {
+    println!("ERROR: Could not lock remote browser to set callback");
+}
+            
             // Add a handler to watch for events
-            // Note: Modified to use FLTK's event handling mechanism correctly
             let remote_browser_clone = self.remote_browser_ref.clone();
+            let temp_dir_clone = temp_dir.clone();
             let mut window = self.window.clone();
             
             window.handle(move |_, ev| {
@@ -683,6 +703,10 @@ pub mod main_window {
                         if let Ok(browser) = remote_browser_clone.lock() {
                             browser.print_debug_status();
                         }
+                        
+                        // Clean up temp files when closing
+                        Self::cleanup_temp_files(&temp_dir_clone);
+                        
                         false // Allow default handling to continue
                     },
                     Event::Focus => {
@@ -695,6 +719,24 @@ pub mod main_window {
                     _ => false,
                 }
             });
+        }
+        
+        // Helper method to clean up temporary downloaded files
+        fn cleanup_temp_files(temp_dir: &Path) {
+            if temp_dir.exists() {
+                if let Ok(entries) = fs::read_dir(temp_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_file() {
+                            if let Err(e) = fs::remove_file(&path) {
+                                println!("Failed to remove temp file {}: {}", path.display(), e);
+                            } else {
+                                println!("Removed temp file: {}", path.display());
+                            }
+                        }
+                    }
+                }
+            }
         }
         
         pub fn show(&mut self) {
