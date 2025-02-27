@@ -30,7 +30,8 @@ pub mod transfer_panel {
         direction_button: Button,
         source_is_local: bool,
         config: Arc<Mutex<Config>>,
-        callback: Option<Box<dyn Fn(bool, PathBuf, PathBuf) + Send + Sync>>,
+        // Changed from Fn to FnMut
+        callback: Option<Box<dyn FnMut(bool, PathBuf, PathBuf) + Send + Sync>>,
     }
     
     impl Clone for TransferPanel {
@@ -152,14 +153,18 @@ pub mod transfer_panel {
         }
         
         fn setup_callbacks(&mut self) {
+            // Create a shared state for source_is_local
+            let source_is_local_state = Arc::new(Mutex::new(self.source_is_local));
+            
             // Direction button callback
             let mut direction_button = self.direction_button.clone();
-            let mut source_is_local = self.source_is_local;
+            let source_is_local_clone = source_is_local_state.clone();
             
             direction_button.set_callback(move |b| {
-                source_is_local = !source_is_local;
+                let mut source_is_local = source_is_local_clone.lock().unwrap();
+                *source_is_local = !*source_is_local;
                 
-                if source_is_local {
+                if *source_is_local {
                     b.set_label("Local → Remote");
                 } else {
                     b.set_label("Remote → Local");
@@ -170,7 +175,10 @@ pub mod transfer_panel {
             let source_input = self.source_input.clone();
             let dest_input = self.dest_input.clone();
             let config = self.config.clone();
-            let callback_ref = Arc::new(Mutex::new(None::<Box<dyn Fn(bool, PathBuf, PathBuf) + Send + Sync>>));
+            let source_is_local_clone = source_is_local_state.clone();
+            
+            // Changed from Fn to FnMut
+            let callback_ref = Arc::new(Mutex::new(None::<Box<dyn FnMut(bool, PathBuf, PathBuf) + Send + Sync>>));
             let callback_clone = callback_ref.clone();
             
             let mut transfer_button = self.transfer_button.clone();
@@ -185,6 +193,10 @@ pub mod transfer_panel {
                 
                 let source = PathBuf::from(&source_path);
                 let dest = PathBuf::from(&dest_path);
+                
+                // Get the current transfer direction from the shared state
+                let source_is_local = *source_is_local_clone.lock().unwrap();
+                println!("Transfer with source_is_local = {}", source_is_local);
                 
                 // Get the currently selected host
                 let host = {
@@ -208,12 +220,34 @@ pub mod transfer_panel {
                     host.key_path.clone(),
                 );
                 
-                let method = factory.create_method();
+                let mut method = factory.create_method();
                 
-                // Perform the transfer (in a real app, this would be in a separate thread)
+                // Ask for password if needed
+                if !host.use_key_auth {
+                    if let Some(password) = dialogs::password_dialog(
+                        "SSH Password", 
+                        &format!("Enter password for {}@{}", host.username, host.hostname)
+                    ) {
+                        if let Some(method_mut) = method.as_any().downcast_mut::<crate::transfer::ssh::SSHTransfer>() {
+                            method_mut.set_password(password.clone());
+                        }
+                    } else {
+                        // User canceled password dialog
+                        return;
+                    }
+                }
+                
+                // Perform the transfer 
+                println!("Transferring file:");
+                println!("  Source: {}", source.display());
+                println!("  Destination: {}", dest.display());
+                println!("  Direction: {}", if source_is_local { "Local → Remote" } else { "Remote → Local" });
+                
                 let result = if source_is_local {
+                    println!("Uploading local file to remote...");
                     method.upload_file(&source, &dest)
                 } else {
+                    println!("Downloading remote file to local...");
                     method.download_file(&source, &dest)
                 };
                 
@@ -222,8 +256,10 @@ pub mod transfer_panel {
                         dialogs::message_dialog("Success", "File transfer completed successfully.");
                         
                         // Call the callback if set
-                        if let Some(ref callback) = *callback_clone.lock().unwrap() {
-                            callback(source_is_local, source, dest);
+                        if let Ok(mut callback_guard) = callback_clone.lock() {
+                            if let Some(ref mut callback) = *callback_guard {
+                                callback(source_is_local, source, dest);
+                            }
                         }
                     },
                     Err(e) => {
@@ -237,6 +273,9 @@ pub mod transfer_panel {
                 let mut callback_guard = callback_ref.lock().unwrap();
                 std::mem::take(&mut *callback_guard)
             };
+            
+            // Store the reference to the shared state
+            self.source_is_local = *source_is_local_state.lock().unwrap();
         }
         
         pub fn set_source_path(&mut self, path: PathBuf, is_local: bool) {
@@ -277,7 +316,7 @@ pub mod transfer_panel {
         
         pub fn set_callback<F>(&mut self, callback: F)
         where
-            F: Fn(bool, PathBuf, PathBuf) + 'static + Send + Sync,
+            F: FnMut(bool, PathBuf, PathBuf) + 'static + Send + Sync,
         {
             self.callback = Some(Box::new(callback));
         }

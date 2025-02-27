@@ -2,12 +2,13 @@
 pub mod main_window {
     use fltk::{
         app,
-        enums::Shortcut,
+        enums::{Shortcut, Event},
         menu::{MenuBar, MenuFlag},
         group::{Group, Tabs},
         window::Window,
         prelude::*,
     };
+    // Removed unused import: fltk::dialog::password
     
     use std::sync::{Arc, Mutex};
     use std::path::PathBuf;
@@ -18,14 +19,15 @@ pub mod main_window {
         PNGProcessorFactory,
     };
     
-    
-
     use crate::config::Config;
+    use crate::transfer::ssh::SSHTransferFactory;
+    // Removed unused import: crate::transfer::ssh::SSHTransfer
     
     use crate::ui::file_browser::file_browser::FileBrowserPanel;
     use crate::ui::image_view::image_view::ImageViewPanel;
     use crate::ui::operations_panel::operations_panel::OperationsPanel;
     use crate::ui::transfer_panel::transfer_panel::TransferPanel;
+    use crate::transfer::method::TransferMethodFactory;
     use crate::ui::dialogs::dialogs;
     
     pub struct MainWindow {
@@ -33,7 +35,8 @@ pub mod main_window {
         config: Arc<Mutex<Config>>,
         image_service: Arc<Mutex<ImageProcessingService>>,
         local_browser: FileBrowserPanel,
-        remote_browser: FileBrowserPanel,
+        // Store a reference to the actual browser instance
+        remote_browser_ref: Arc<Mutex<FileBrowserPanel>>, 
         image_view: ImageViewPanel,
         operations_panel: OperationsPanel,
         transfer_panel: TransferPanel,
@@ -59,7 +62,6 @@ pub mod main_window {
             
             // Create menu bar
             let mut menu_bar = MenuBar::new(0, 0, width, 30, "");
-            Self::setup_menu(&mut menu_bar, config.clone(), image_service.clone());
             
             // Create main layout
             let content_y = 30; // Below menu bar
@@ -87,18 +89,20 @@ pub mod main_window {
                 0, 
                 content_y + 35, 
                 panel_width, 
-                browser_height,  // Use browser_height here directly
+                browser_height,
                 "Local Files"
             );
             
-            // Create remote file browser panel (right side)
+            // Create remote file browser panel (right side) and immediately wrap in Arc<Mutex<>>
             let remote_browser = FileBrowserPanel::new(
                 panel_width + 10, 
                 content_y + 35, 
                 panel_width, 
-                browser_height,  // Use browser_height here directly
+                browser_height,
                 "Raspberry Pi Files"
             );
+            
+            let remote_browser_ref = Arc::new(Mutex::new(remote_browser));
             
             let transfer_panel = TransferPanel::new(
                 0,
@@ -151,14 +155,22 @@ pub mod main_window {
                 config,
                 image_service,
                 local_browser,
-                remote_browser,
+                remote_browser_ref,
                 image_view,
                 operations_panel,
                 transfer_panel,
             };
             
-            // Setup callbacks
+            // Setup callbacks with the shared remote browser reference
             main_window.setup_callbacks();
+            
+            // Setup menu with access to the remote browser
+            Self::setup_menu(
+                &mut menu_bar, 
+                main_window.config.clone(), 
+                main_window.image_service.clone(),
+                main_window.remote_browser_ref.clone()
+            );
             
             main_window
         }
@@ -166,7 +178,8 @@ pub mod main_window {
         fn setup_menu(
             menu: &mut MenuBar, 
             config: Arc<Mutex<Config>>,
-            image_service: Arc<Mutex<ImageProcessingService>>
+            image_service: Arc<Mutex<ImageProcessingService>>,
+            remote_browser: Arc<Mutex<FileBrowserPanel>>
         ) {
             // File menu
             menu.add(
@@ -203,29 +216,240 @@ pub mod main_window {
             );
             
             // Connection menu
-            let config_clone = config.clone();
+            let config_clone1 = config.clone();
+            let remote_browser_clone1 = remote_browser.clone();
+
             menu.add(
                 "&Connection/&Connect to Raspberry Pi...\t",
                 Shortcut::Ctrl | 'r',
                 MenuFlag::Normal,
                 move |_| {
-                    // Show connection dialog
-                    if let Some(host) = dialogs::connection_dialog(config_clone.clone()) {
-                        // Store connection in config
-                        let mut config = config_clone.lock().unwrap();
-                        
-                        // Check if host already exists
-                        if let Some(pos) = config.hosts.iter().position(|h| h.name == host.name) {
-                            config.hosts[pos] = host.clone();
-                        } else {
-                            config.hosts.push(host.clone());
+                    // Show connection dialog without locking anything first
+                    if let Some(host) = dialogs::connection_dialog(config_clone1.clone()) {
+                        // Now we have a host, update config
+                        {
+                            let mut config = config_clone1.lock().unwrap();
+                            
+                            // Check if host already exists
+                            if let Some(pos) = config.hosts.iter().position(|h| h.name == host.name) {
+                                config.hosts[pos] = host.clone();
+                            } else {
+                                config.hosts.push(host.clone());
+                            }
+                            
+                            // Save config
+                            let _ = config.save();
                         }
                         
-                        // Save config
-                        let _ = config.save();
+                        // If using password auth, prompt for password
+                        let mut password_opt = None;
+                        if !host.use_key_auth {
+                            password_opt = dialogs::password_dialog(
+                                "SSH Password",
+                                &format!("Enter password for {}@{}:", host.username, host.hostname)
+                            );
+                        }
                         
-                        // Use the new connection
-                        println!("Connecting to: {}", host.hostname);
+                        // Create SSH connection to list remote files
+                        let factory = SSHTransferFactory::new(
+                            host.hostname.clone(),
+                            host.username.clone(),
+                            host.port,
+                            host.use_key_auth,
+                            host.key_path.clone(),
+                        );
+                        
+                        let mut transfer_method = factory.create_method();
+                        
+                        // If password was provided, set it in the transfer method
+                        if let Some(password) = &password_opt {
+                            transfer_method.set_password(password);
+                        }
+                        
+                        // Set initial remote directory (usually /home/username)
+                        let remote_home = PathBuf::from(format!("/home/{}", host.username));
+                        
+                        println!("DEBUG: About to set remote directory with path: {}", remote_home.display());
+                        println!("DEBUG: Transfer method: {}", transfer_method.get_name());
+                        
+                        // Get a mutable reference to the actual remote browser through the mutex
+                        if let Ok(mut browser) = remote_browser_clone1.lock() {
+                            // Store credentials for future use
+                            browser.current_hostname = Some(host.hostname.clone());
+                            browser.current_username = Some(host.username.clone());
+                            browser.current_password = password_opt;
+                            
+                            // Configure the remote browser with the transfer method and initial path
+                            browser.set_remote_directory(&remote_home, transfer_method);
+                            
+                            // Force a UI refresh after setting up the connection
+                            app::flush();  // Flush pending UI events
+                            app::awake();  // Wake up the UI thread
+                            app::redraw(); // Force complete redraw
+                            
+                            // Print debug status after connection
+                            browser.print_debug_status();
+                            
+                            println!("DEBUG: Set remote directory successfully");
+                            println!("Connected to: {} and set remote home to: {}", 
+                                    host.hostname, remote_home.display());
+                        } else {
+                            println!("Error: Could not lock remote browser");
+                        }
+                    }
+                },
+            );
+
+            // Add a new menu item to directly show Raspberry Pi files
+            let config_clone2 = config.clone();
+            let remote_browser_clone2 = remote_browser.clone();
+
+            menu.add(
+                "&Connection/&Show Raspberry Pi Files\t",
+                Shortcut::None,
+                MenuFlag::Normal,
+                move |_| {
+                    println!("DEBUG: Show Raspberry Pi Files clicked");
+                    
+                    // Ask for password first since we need it for the connection
+                    let password = dialogs::password_dialog("SSH Password", "Enter password for Raspberry Pi:");
+                    
+                    // First get the saved config to use stored credentials
+                    if let Ok(config) = config_clone2.lock() {
+                        // Find a Raspberry Pi host in saved hosts
+                        let host = config.hosts.iter().find(|h| 
+                            h.hostname.contains("raspberry") || 
+                            h.hostname.contains("pi") || 
+                            h.name.contains("Raspberry") || 
+                            h.name.contains("Pi")
+                        );
+                        
+                        let (hostname, username, port) = if let Some(pi_host) = host {
+                            println!("Using saved Raspberry Pi connection: {}", pi_host.name);
+                            (
+                                pi_host.hostname.clone(),
+                                pi_host.username.clone(),
+                                pi_host.port
+                            )
+                        } else {
+                            println!("No saved Raspberry Pi host found, using defaults");
+                            ("raspberrypi.local".to_string(), "pi".to_string(), 22)
+                        };
+                        
+                        if let Ok(mut browser) = remote_browser_clone2.lock() {
+                            // Print current status
+                            browser.print_debug_status();
+                            
+                            // Create SSH connection with password
+                            let factory = SSHTransferFactory::new(
+                                hostname.clone(),
+                                username.clone(),
+                                port,
+                                false,      // Use password auth
+                                None,       // No key path
+                            );
+                            
+                            let mut transfer_method = factory.create_method();
+                            
+                            // Set the password directly in the transfer method
+                            if let Some(pwd) = &password {
+                                transfer_method.set_password(pwd);
+                                println!("Set password for SSH connection");
+                                
+                                // Also store it in the browser for later use
+                                browser.current_password = password.clone();
+                            }
+                            
+                            let remote_home = PathBuf::from(format!("/home/{}", username));
+                            
+                            println!("Setting up direct connection to Raspberry Pi at {}", remote_home.display());
+                            
+                            // Store credentials
+                            browser.current_hostname = Some(hostname.clone());
+                            browser.current_username = Some(username.clone());
+                            browser.current_password = password.clone();
+                            
+                            // Force it into remote mode with the new connection
+                            browser.set_remote_directory(&remote_home, transfer_method);
+                            
+                            // Force UI update
+                            app::flush();
+                            app::awake();
+                            app::redraw();
+                            
+                            // Print status again
+                            browser.print_debug_status();
+                            
+                            println!("DEBUG: Show Raspberry Pi Files complete");
+                        } else {
+                            println!("ERROR: Could not lock remote browser");
+                        }
+                    } else {
+                        println!("ERROR: Could not get config");
+                    }
+                },
+            );
+
+            // Add a special debug menu item to force remote refresh
+            let remote_browser_clone3 = remote_browser.clone();
+            menu.add(
+                "&Connection/&Force Remote Refresh\t",
+                Shortcut::None,
+                MenuFlag::Normal,
+                move |_| {
+                    println!("DEBUG: Force Remote Refresh menu clicked");
+                    
+                    if let Ok(mut browser) = remote_browser_clone3.lock() {
+                        // Check if we're in remote mode
+                        println!("DEBUG: Remote mode: {}", browser.is_remote());
+                        println!("DEBUG: Has transfer method: {}", browser.has_transfer_method());
+                        
+                        if browser.is_remote() && browser.has_transfer_method() {
+                            println!("DEBUG: Remote mode confirmed, refreshing browser");
+                            browser.refresh();
+                        } else if browser.is_remote() && !browser.has_transfer_method() {
+                            println!("DEBUG: In remote mode but no transfer method! Forcing remote mode...");
+                            browser.force_remote_mode(); 
+                        } else {
+                            println!("DEBUG: Not in remote mode, forcing it");
+                            browser.force_remote_mode();
+                        }
+                        
+                        // Explicitly refresh and force UI update
+                        app::flush();
+                        app::awake();
+                        app::redraw();
+                        
+                        // Print debug status
+                        browser.print_debug_status();
+                        
+                        println!("DEBUG: Remote refresh complete");
+                    } else {
+                        println!("ERROR: Could not lock remote browser");
+                    }
+                },
+            );
+
+            // Add a debug info menu item
+            let remote_browser_clone4 = remote_browser.clone();
+            menu.add(
+                "&Connection/&Show Debug Info\t",
+                Shortcut::None,
+                MenuFlag::Normal,
+                move |_| {
+                    if let Ok(browser) = remote_browser_clone4.lock() {
+                        browser.print_debug_status();
+                        dialogs::message_dialog(
+                            "Browser Status", 
+                            &format!(
+                                "Remote mode: {}\nHas transfer: {}", 
+                                browser.is_remote(),
+                                browser.has_transfer_method()
+                                // Removed private field access to current_dir
+                            )
+                        );
+                    } else {
+                        println!("ERROR: Could not lock remote browser");
                     }
                 },
             );
@@ -272,45 +496,97 @@ pub mod main_window {
         }
         
         fn setup_callbacks(&mut self) {
+            // Clone for local browser
+            let local_browser = Arc::new(Mutex::new(self.local_browser.clone()));
+            
+            // Use the existing remote browser reference
+            let remote_browser_clone = self.remote_browser_ref.clone();
+            
             // Connect the transfer panel with file browsers
-            let _local_browser = self.local_browser.clone();
-            let _remote_browser = self.remote_browser.clone();
             self.transfer_panel.set_callback(move |source_is_local, source_path, dest_path| {
                 if source_is_local {
                     // Upload from local to remote
                     println!("Upload: {} -> {}", source_path.display(), dest_path.display());
                     // Refresh remote browser after upload
-                    // remote_browser.refresh();
+                    if let Ok(mut browser) = remote_browser_clone.lock() {
+                        browser.refresh();
+                        
+                        // Force a UI refresh after the refresh operation
+                        app::flush();
+                        app::awake();
+                        app::redraw(); // Add redraw for better UI update
+                    }
                 } else {
                     // Download from remote to local
                     println!("Download: {} -> {}", source_path.display(), dest_path.display());
                     // Refresh local browser after download
-                    // local_browser.refresh();
+                    if let Ok(mut browser) = local_browser.lock() {
+                        browser.refresh();
+                        
+                        // Force UI update here too
+                        app::flush();
+                        app::awake();
+                        app::redraw();
+                    }
                 }
             });
             
-            // Fix: Since we need Send + Sync for the closures, we'll use Arc<Mutex<>> instead of Rc<RefCell<>>
+            // Create a thread-safe reference to the transfer panel
             let transfer_panel = Arc::new(Mutex::new(self.transfer_panel.clone()));
             
+            // Local browser file selection callback
             let transfer_panel_clone = transfer_panel.clone();
             self.local_browser.set_callback(move |path, is_dir| {
                 if !is_dir {
+                    println!("Local file selected: {}", path.display());
                     if let Ok(mut panel) = transfer_panel_clone.lock() {
                         panel.set_source_path(path, true);
                     }
                 }
             });
             
+            // Remote browser file selection callback 
             let transfer_panel_clone = transfer_panel.clone();
-            self.remote_browser.set_callback(move |path, is_dir| {
-                if !is_dir {
-                    if let Ok(mut panel) = transfer_panel_clone.lock() {
-                        panel.set_source_path(path, false);
+            let remote_browser_clone = self.remote_browser_ref.clone();
+            
+            // First get a lock on the remote browser to set its callback
+            if let Ok(mut remote_browser) = remote_browser_clone.lock() {
+                remote_browser.set_callback(move |path, is_dir| {
+                    if !is_dir {
+                        println!("Remote file selected: {}", path.display());
+                        if let Ok(mut panel) = transfer_panel_clone.lock() {
+                            panel.set_source_path(path, false);
+                        }
                     }
+                });
+            } else {
+                println!("ERROR: Could not lock remote browser to set callback");
+            }
+            
+            // Add a handler to watch for events
+            // Note: Modified to use FLTK's event handling mechanism correctly
+            let remote_browser_clone = self.remote_browser_ref.clone();
+            let mut window = self.window.clone();
+            
+            window.handle(move |_, ev| {
+                match ev {
+                    Event::Close => {
+                        println!("Window close event received");
+                        if let Ok(browser) = remote_browser_clone.lock() {
+                            browser.print_debug_status();
+                        }
+                        false // Allow default handling to continue
+                    },
+                    Event::Focus => {
+                        println!("Window focus event received");
+                        if let Ok(browser) = remote_browser_clone.lock() {
+                            browser.print_debug_status();
+                        }
+                        false // Allow default handling to continue
+                    },
+                    _ => false,
                 }
             });
-            
-            // TODO: Add more callbacks for image view, operations panel, etc.
         }
         
         pub fn show(&mut self) {

@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::io::{self, Write};
+use std::any::Any;
 
 use crate::transfer::method::{TransferMethod, TransferError, TransferMethodFactory};
 
@@ -313,6 +314,12 @@ impl TransferMethod for SSHTransfer {
     
     fn get_description(&self) -> String {
         format!("SSH/SCP transfer to {}@{}", self.username, self.hostname)
+    }
+    fn as_any(&mut self) -> &mut dyn Any {
+        self
+    }
+    fn set_password(&mut self, password: &str) {
+        self.password = Some(password.to_string());
     }
 }
 

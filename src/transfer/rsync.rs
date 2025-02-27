@@ -1,9 +1,11 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::io::{self, Write};
+use std::any::Any;
 
 use crate::transfer::method::{TransferMethod, TransferError, TransferMethodFactory};
 use crate::transfer::ssh::SSHTransfer;
+
 
 pub struct RsyncTransfer {
     hostname: String,
@@ -262,6 +264,9 @@ impl TransferMethod for RsyncTransfer {
             self.username, 
             self.hostname, 
             self.options.join(" "))
+    }
+    fn as_any(&mut self) -> &mut dyn Any {
+        self
     }
 }
 
