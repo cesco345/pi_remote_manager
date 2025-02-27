@@ -16,6 +16,7 @@ pub mod file_browser {
     
     use crate::transfer::method::TransferMethod;
     use crate::transfer::method::TransferMethodFactory;
+    use crate::transfer::method::TransferError;
     
     // A struct to represent a file entry in a directory
     #[derive(Clone, Debug)]
@@ -598,17 +599,44 @@ pub mod file_browser {
         {
             self.callback = Some(Box::new(callback));
         }
-
+        
+        // NEW METHOD: Download a file from remote to a local path
+        pub fn download_remote_file(&self, remote_path: &Path, local_path: &Path) -> Result<(), String> {
+            let state = self.shared_state.lock().unwrap();
+            
+            if !state.is_remote {
+                return Err("Not in remote mode".to_string());
+            }
+            
+            if let Some(ref method) = state.transfer_method {
+                match method.download_file(remote_path, local_path) {
+                    Ok(_) => {
+                        println!("Downloaded: {} -> {}", remote_path.display(), local_path.display());
+                        Ok(())
+                    },
+                    Err(e) => Err(format!("Download failed: {}", e))
+                }
+            } else {
+                Err("No transfer method available".to_string())
+            }
+        }
+        
         // Helper to check if a file is an image based on extension
-fn is_image_file(path: &Path) -> bool {
-    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-        matches!(
-            ext.to_lowercase().as_str(),
-            "jpg" | "jpeg" | "png" | "gif" | "bmp" | "tiff" | "tif" | "webp"
-        )
-    } else {
-        false
-    }
-}
+        pub fn is_image_file(path: &Path) -> bool {
+            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                matches!(
+                    ext.to_lowercase().as_str(),
+                    "jpg" | "jpeg" | "png" | "gif" | "bmp" | "tiff" | "tif" | "webp"
+                )
+            } else {
+                false
+            }
+        }
+        
+        // Get the current directory
+        pub fn get_current_directory(&self) -> PathBuf {
+            let state = self.shared_state.lock().unwrap();
+            state.current_dir.clone()
+        }
     }
 }
