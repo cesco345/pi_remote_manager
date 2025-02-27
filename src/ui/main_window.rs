@@ -12,7 +12,7 @@ pub mod main_window {
     use std::sync::{Arc, Mutex};
     use std::path::PathBuf;
     
-    use crate::core::image_processor::image_processor::{
+    use crate::core::image::{
         ImageProcessingService,
         JPEGProcessorFactory,
         PNGProcessorFactory,

@@ -13,8 +13,9 @@ pub mod transfer_panel {
     
     use crate::config::Config;
 
-    use crate::transfer::ssh::ssh::SSHTransferFactory;
-    use crate::transfer::transfer_method::transfer_method::{
+    // Updated imports to use the new module structure
+    use crate::transfer::ssh::SSHTransferFactory;
+    use crate::transfer::method::{
         TransferMethod,
         TransferMethodFactory,
     };

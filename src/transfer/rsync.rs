@@ -3,23 +3,26 @@ use std::process::Command;
 use std::io::{self, Write};
 
 use crate::transfer::method::{TransferMethod, TransferError, TransferMethodFactory};
+use crate::transfer::ssh::SSHTransfer;
 
-pub struct SSHTransfer {
+pub struct RsyncTransfer {
     hostname: String,
     username: String,
     port: u16,
     use_key_auth: bool,
     key_path: Option<PathBuf>,
+    options: Vec<String>,
     password: Option<String>,
 }
 
-impl SSHTransfer {
+impl RsyncTransfer {
     pub fn new(
         hostname: String,
         username: String,
         port: u16,
         use_key_auth: bool,
         key_path: Option<PathBuf>,
+        options: Vec<String>,
     ) -> Self {
         Self {
             hostname,
@@ -27,6 +30,7 @@ impl SSHTransfer {
             port,
             use_key_auth,
             key_path,
+            options,
             password: None,
         }
     }
@@ -35,6 +39,7 @@ impl SSHTransfer {
         hostname: String,
         username: String,
         port: u16,
+        options: Vec<String>,
         password: String,
     ) -> Self {
         Self {
@@ -43,6 +48,7 @@ impl SSHTransfer {
             port,
             use_key_auth: false,
             key_path: None,
+            options,
             password: Some(password),
         }
     }
@@ -98,7 +104,7 @@ impl SSHTransfer {
     }
 }
 
-impl TransferMethod for SSHTransfer {
+impl TransferMethod for RsyncTransfer {
     fn upload_file(
         &self,
         local_path: &Path,
@@ -116,26 +122,35 @@ impl TransferMethod for SSHTransfer {
             if let Some(ref password) = self_copy.password {
                 cmd = Command::new("sshpass");
                 cmd.arg("-p").arg(password);
-                cmd.arg("scp");
+                cmd.arg("rsync");
             } else {
                 return Err(TransferError::TransferFailed(
                     "Password required for password authentication".to_string()
                 ));
             }
         } else {
-            // For key auth, use scp directly
-            cmd = Command::new("scp");
+            // For key auth, use rsync directly
+            cmd = Command::new("rsync");
         }
         
-        // Add options
-        cmd.arg("-P").arg(self.port.to_string());
+        // Add standard options
+        cmd.arg("-avz");
         
-        // Add key if using key authentication
+        // Add custom options
+        for option in &self.options {
+            cmd.arg(option);
+        }
+        
+        // Configure SSH options based on auth method
+        let mut ssh_opts = format!("ssh -p {}", self.port);
+        
         if self.use_key_auth {
             if let Some(key_path) = &self.key_path {
-                cmd.arg("-i").arg(key_path);
+                ssh_opts.push_str(&format!(" -i {}", key_path.to_string_lossy()));
             }
         }
+        
+        cmd.arg("-e").arg(ssh_opts);
         
         // Add source and destination
         cmd.arg(local_path);
@@ -149,7 +164,7 @@ impl TransferMethod for SSHTransfer {
         cmd.arg(remote);
         
         // Use debug command
-        self_copy.debug_command(&mut cmd, "scp upload")?;
+        self_copy.debug_command(&mut cmd, "rsync upload")?;
         
         Ok(())
     }
@@ -171,26 +186,35 @@ impl TransferMethod for SSHTransfer {
             if let Some(ref password) = self_copy.password {
                 cmd = Command::new("sshpass");
                 cmd.arg("-p").arg(password);
-                cmd.arg("scp");
+                cmd.arg("rsync");
             } else {
                 return Err(TransferError::TransferFailed(
                     "Password required for password authentication".to_string()
                 ));
             }
         } else {
-            // For key auth, use scp directly
-            cmd = Command::new("scp");
+            // For key auth, use rsync directly
+            cmd = Command::new("rsync");
         }
         
-        // Add options
-        cmd.arg("-P").arg(self.port.to_string());
+        // Add standard options
+        cmd.arg("-avz");
         
-        // Add key if using key authentication
+        // Add custom options
+        for option in &self.options {
+            cmd.arg(option);
+        }
+        
+        // Configure SSH options based on auth method
+        let mut ssh_opts = format!("ssh -p {}", self.port);
+        
         if self.use_key_auth {
             if let Some(key_path) = &self.key_path {
-                cmd.arg("-i").arg(key_path);
+                ssh_opts.push_str(&format!(" -i {}", key_path.to_string_lossy()));
             }
         }
+        
+        cmd.arg("-e").arg(ssh_opts);
         
         // Add source and destination
         let remote = format!(
@@ -203,7 +227,7 @@ impl TransferMethod for SSHTransfer {
         cmd.arg(local_path);
         
         // Use debug command
-        self_copy.debug_command(&mut cmd, "scp download")?;
+        self_copy.debug_command(&mut cmd, "rsync download")?;
         
         Ok(())
     }
@@ -212,112 +236,37 @@ impl TransferMethod for SSHTransfer {
         &self,
         remote_dir: &Path
     ) -> Result<Vec<(String, bool)>, TransferError> {
-        // Create a mutable copy for potential password prompt
-        let mut self_copy = self.clone();
-        self_copy.ensure_password()?;
+        // Create an SSH transfer to reuse its list_files implementation
+        let mut ssh = SSHTransfer::new(
+            self.hostname.clone(),
+            self.username.clone(),
+            self.port,
+            self.use_key_auth,
+            self.key_path.clone(),
+        );
         
-        // Choose command based on authentication method
-        let mut cmd;
-        
-        if !self.use_key_auth {
-            // For password auth, use sshpass
-            if let Some(ref password) = self_copy.password {
-                cmd = Command::new("sshpass");
-                cmd.arg("-p").arg(password);
-                cmd.arg("ssh");
-            } else {
-                return Err(TransferError::TransferFailed(
-                    "Password required for password authentication".to_string()
-                ));
-            }
-        } else {
-            // For key auth, use ssh directly
-            cmd = Command::new("ssh");
+        // Pass password if available
+        if let Some(ref password) = self.password {
+            ssh.set_password(password.clone());
         }
         
-        // Add options
-        cmd.arg("-p").arg(self.port.to_string());
-        
-        // Add key if using key authentication
-        if self.use_key_auth {
-            if let Some(key_path) = &self.key_path {
-                cmd.arg("-i").arg(key_path);
-            }
-        }
-        
-        // Add remote username and host
-        let remote_user_host = format!("{}@{}", self.username, self.hostname);
-        cmd.arg(remote_user_host);
-        
-        // Command to list files with format: name,is_dir
-        let ls_cmd = format!("ls -la {}", remote_dir.to_string_lossy());
-        cmd.arg(ls_cmd);
-        
-        println!("Executing SSH list files command: {:?}", cmd);
-        
-        // Execute command
-        let output = cmd.output().map_err(|e| {
-            TransferError::TransferFailed(format!("Failed to execute ssh/ls: {}", e))
-        })?;
-        
-        // Debug output
-        println!("Command status: {}", output.status);
-        if !output.stdout.is_empty() {
-            println!("STDOUT first 100 bytes: {:?}", 
-                String::from_utf8_lossy(&output.stdout[..std::cmp::min(100, output.stdout.len())]));
-        } else {
-            println!("STDOUT is empty");
-        }
-        
-        if !output.stderr.is_empty() {
-            println!("STDERR: {}", String::from_utf8_lossy(&output.stderr));
-        }
-        
-        if !output.status.success() {
-            return Err(TransferError::TransferFailed(
-                String::from_utf8_lossy(&output.stderr).to_string()
-            ));
-        }
-        
-        // Parse output
-        let output_str = String::from_utf8_lossy(&output.stdout);
-        let mut files = Vec::new();
-        
-        println!("Parsing output lines: {}", output_str.lines().count());
-        
-        // More robust parsing for ls -la output
-        for line in output_str.lines().skip(1) { // Skip the first line (total)
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 9 {
-                let file_type = parts[0].chars().next().unwrap_or('-');
-                let is_dir = file_type == 'd';
-                let name = parts[8].to_string();
-                
-                // Skip . and .. directories
-                if name != "." && name != ".." {
-                    println!("Found file: {} (is_dir: {})", name, is_dir);
-                    files.push((name, is_dir));
-                }
-            } else {
-                println!("Couldn't parse line: {}", line);
-            }
-        }
-        
-        println!("Returning {} files", files.len());
-        Ok(files)
+        ssh.list_files(remote_dir)
     }
     
     fn get_name(&self) -> &str {
-        "SSH Transfer"
+        "Rsync Transfer"
     }
     
     fn get_description(&self) -> String {
-        format!("SSH/SCP transfer to {}@{}", self.username, self.hostname)
+        format!("Rsync transfer to {}@{} with options: {}", 
+            self.username, 
+            self.hostname, 
+            self.options.join(" "))
     }
 }
 
-// Make SSHTransfer cloneable for password handling
-impl Clone for SSHTransfer {
+// Make RsyncTransfer cloneable for password handling
+impl Clone for RsyncTransfer {
     fn clone(&self) -> Self {
         Self {
             hostname: self.hostname.clone(),
@@ -325,27 +274,30 @@ impl Clone for SSHTransfer {
             port: self.port,
             use_key_auth: self.use_key_auth,
             key_path: self.key_path.clone(),
+            options: self.options.clone(),
             password: self.password.clone(),
         }
     }
 }
 
-pub struct SSHTransferFactory {
+pub struct RsyncTransferFactory {
     hostname: String,
     username: String,
     port: u16,
     use_key_auth: bool,
     key_path: Option<PathBuf>,
+    options: Vec<String>,
     password: Option<String>,
 }
 
-impl SSHTransferFactory {
+impl RsyncTransferFactory {
     pub fn new(
         hostname: String,
         username: String,
         port: u16,
         use_key_auth: bool,
         key_path: Option<String>,
+        options: Vec<String>,
     ) -> Self {
         Self {
             hostname,
@@ -353,6 +305,7 @@ impl SSHTransferFactory {
             port,
             use_key_auth,
             key_path: key_path.map(PathBuf::from),
+            options,
             password: None,
         }
     }
@@ -361,6 +314,7 @@ impl SSHTransferFactory {
         hostname: String,
         username: String,
         port: u16,
+        options: Vec<String>,
         password: String,
     ) -> Self {
         Self {
@@ -369,6 +323,7 @@ impl SSHTransferFactory {
             port,
             use_key_auth: false,
             key_path: None,
+            options,
             password: Some(password),
         }
     }
@@ -378,14 +333,15 @@ impl SSHTransferFactory {
     }
 }
 
-impl TransferMethodFactory for SSHTransferFactory {
+impl TransferMethodFactory for RsyncTransferFactory {
     fn create_method(&self) -> Box<dyn TransferMethod> {
-        let mut transfer = SSHTransfer::new(
+        let mut transfer = RsyncTransfer::new(
             self.hostname.clone(),
             self.username.clone(),
             self.port,
             self.use_key_auth,
             self.key_path.clone(),
+            self.options.clone(),
         );
         
         // Pass password if available
@@ -397,11 +353,6 @@ impl TransferMethodFactory for SSHTransferFactory {
     }
     
     fn get_name(&self) -> String {
-        format!("SSH/SCP to {}@{}", self.username, self.hostname)
+        format!("Rsync to {}@{}", self.username, self.hostname)
     }
-}
-
-// Compatibility module to match the original import path
-pub mod ssh {
-    pub use super::*;
 }

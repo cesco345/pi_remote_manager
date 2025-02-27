@@ -10,15 +10,14 @@ pub mod operations_panel {
     
     use std::sync::{Arc, Mutex};
     
-    use crate::core::image_processor::image_processor::{
-        ImageProcessingService,
+    // Updated imports to use the new module structure
+    use crate::core::image::{
         ImageProcessor,
         ImageProcessorFactory,
-    };
-    use crate::core::operations::operations::{
+        ImageProcessingService,
         ImageOperation,
         ResizeOperation,
-        BrightnessOperation,
+        BrightnessOperation
     };
     
     use crate::ui::dialogs::dialogs;

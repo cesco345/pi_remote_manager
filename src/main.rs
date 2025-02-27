@@ -1,10 +1,7 @@
-// /src/main.rs 
-
 mod ui;
 mod core;
 mod transfer;
 mod config;
-mod utils;
 
 use fltk::app;
 use crate::ui::main_window::main_window::MainWindow;
