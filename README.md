@@ -43,7 +43,7 @@ source $HOME/.cargo/env
 ### 2. Clone the Repository
 
 ```bash
-git clone https://github.com/yourusername/pi_remote_manager.git
+git clone https://github.com/cesco345/pi_remote_manager.git
 cd pi_remote_manager
 ```
 
@@ -87,7 +87,7 @@ host = "raspberrypi.local"
 port = 22
 username = "pi"
 # Either password or key_path should be specified
-password = "" 
+password = ""
 key_path = "~/.ssh/id_rsa"
 ```
 
