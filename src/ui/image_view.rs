@@ -62,6 +62,9 @@ pub mod image_view {
                 return false;
             }
             
+            // Clear any previous image first
+            self.clear();
+            
             let extension = path.extension()
                 .and_then(|ext| ext.to_str())
                 .unwrap_or("")
@@ -78,7 +81,13 @@ pub mod image_view {
                 // Store the current image path
                 let mut current = self.current_image.lock().unwrap();
                 *current = Some(path.to_path_buf());
+                println!("Successfully loaded image: {}", path.display());
+            } else {
+                println!("Failed to load image: {}", path.display());
             }
+            
+            // Force a redraw of the entire component
+            self.group.redraw();
             
             result
         }
@@ -104,6 +113,12 @@ pub mod image_view {
         }
         
         fn scale_and_set_image<I: ImageExt + Clone>(&mut self, img: &mut I) {
+            // Clear any existing image first
+            self.display.set_image::<I>(None);
+            
+            // Reset the background 
+            self.display.set_color(Color::from_rgb(240, 240, 240));
+            
             // Get display dimensions
             let display_w = self.display.width();
             let display_h = self.display.height();
@@ -117,16 +132,22 @@ pub mod image_view {
             let scale_h = display_h as f64 / img_h as f64;
             let scale = scale_w.min(scale_h);
             
-            // Scale image if needed
-            if scale < 1.0 {
-                let new_w = (img_w as f64 * scale) as i32;
-                let new_h = (img_h as f64 * scale) as i32;
-                img.scale(new_w, new_h, true, true);
-            }
+            // Scale image to fit display (whether smaller or larger)
+            let new_w = (img_w as f64 * scale) as i32;
+            let new_h = (img_h as f64 * scale) as i32;
+            img.scale(new_w, new_h, true, true);
             
             // Set image to display
             self.display.set_image(Some(img.clone()));
+            
+            // Force complete redraw
             self.display.redraw();
+            
+            // Make sure the parent is also redrawn if it exists
+            if let Some(mut parent) = self.display.parent() {
+                // We can't modify parent, just request a redraw
+                parent.redraw();
+            }
         }
         
         pub fn get_current_image(&self) -> Option<PathBuf> {
@@ -135,10 +156,19 @@ pub mod image_view {
         }
         
         pub fn clear(&mut self) {
+            // Clear the image
             self.display.set_image::<PngImage>(None);
+            
+            // Reset color to original
+            self.display.set_color(Color::from_rgb(240, 240, 240));
+            
+            // Clear the path reference
             let mut current = self.current_image.lock().unwrap();
             *current = None;
+            
+            // Force a redraw
             self.display.redraw();
+            self.group.redraw();
         }
     }
 }

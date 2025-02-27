@@ -11,7 +11,7 @@ pub mod main_window {
     // Removed unused import: fltk::dialog::password
     
     use std::sync::{Arc, Mutex};
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     
     use crate::core::image::{
         ImageProcessingService,
@@ -29,6 +29,18 @@ pub mod main_window {
     use crate::ui::transfer_panel::transfer_panel::TransferPanel;
     use crate::transfer::method::TransferMethodFactory;
     use crate::ui::dialogs::dialogs;
+    
+    // Helper function to check for image file extensions
+    fn is_image_file(path: &Path) -> bool {
+        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+            matches!(
+                ext.to_lowercase().as_str(),
+                "jpg" | "jpeg" | "png" | "gif" | "bmp" | "tiff" | "tif" | "webp"
+            )
+        } else {
+            false
+        }
+    }
     
     pub struct MainWindow {
         window: Window,
@@ -161,16 +173,20 @@ pub mod main_window {
                 transfer_panel,
             };
             
-            // Setup callbacks with the shared remote browser reference
-            main_window.setup_callbacks();
+            // Create a shared reference to the image view
+            let image_view_ref = Arc::new(Mutex::new(main_window.image_view.clone()));
             
-            // Setup menu with access to the remote browser
+            // Setup menu with access to the remote browser and image view
             Self::setup_menu(
                 &mut menu_bar, 
                 main_window.config.clone(), 
                 main_window.image_service.clone(),
-                main_window.remote_browser_ref.clone()
+                main_window.remote_browser_ref.clone(),
+                image_view_ref.clone()
             );
+            
+            // Setup callbacks with the shared remote browser reference and image view
+            main_window.setup_callbacks(tabs, content_y, image_view_ref);
             
             main_window
         }
@@ -179,17 +195,31 @@ pub mod main_window {
             menu: &mut MenuBar, 
             config: Arc<Mutex<Config>>,
             image_service: Arc<Mutex<ImageProcessingService>>,
-            remote_browser: Arc<Mutex<FileBrowserPanel>>
+            remote_browser: Arc<Mutex<FileBrowserPanel>>,
+            image_view: Arc<Mutex<ImageViewPanel>>
         ) {
             // File menu
+            let image_view_clone = image_view.clone();
             menu.add(
                 "&File/&Open Image...\t",
                 Shortcut::Ctrl | 'o',
                 MenuFlag::Normal,
                 move |_| {
                     if let Some(path) = dialogs::open_file_dialog("Open Image", "") {
-                        // Handle opening the image
                         println!("Opening image: {}", path.display());
+                        
+                        // Get lock on the image view panel and load the image
+                        if let Ok(mut view) = image_view_clone.lock() {
+                            if view.load_image(&path) {
+                                println!("Successfully loaded image: {}", path.display());
+                            } else {
+                                // Show error dialog if loading fails
+                                dialogs::message_dialog(
+                                    "Error", 
+                                    &format!("Failed to load image: {}", path.display())
+                                );
+                            }
+                        }
                     }
                 },
             );
@@ -495,12 +525,52 @@ pub mod main_window {
             );
         }
         
-        fn setup_callbacks(&mut self) {
+        fn setup_callbacks(
+            &mut self, 
+            mut tabs: Tabs, 
+            content_y: i32, 
+            image_view: Arc<Mutex<ImageViewPanel>>
+        ) {
             // Clone for local browser
             let local_browser = Arc::new(Mutex::new(self.local_browser.clone()));
             
             // Use the existing remote browser reference
             let remote_browser_clone = self.remote_browser_ref.clone();
+            
+            // Add a callback for tab selection
+            let mut tabs_callback = tabs.clone();
+            let image_view_tab_clone = image_view.clone();
+            
+            tabs.set_callback(move |tabs| {
+                // Get the currently selected tab and its label
+                if let Some(tab) = tabs.value() {
+                    // The label() method returns a String, not an Option<String>
+                    let label = tab.label();
+                    println!("Selected tab: {}", label);
+                    
+                    // Check if the Image Processing tab is selected
+                    if label == "Image Processing" {
+                        println!("Image Processing tab selected");
+                        
+                        // Refresh the image view if there's a current image
+                        if let Ok(view) = image_view_tab_clone.lock() {
+                            if let Some(current_path) = view.get_current_image() {
+                                println!("Refreshing current image: {}", current_path.display());
+                                // Force a redraw of the image view
+                                app::redraw();
+                            }
+                        }
+                    }
+                }
+            });
+            
+            // Window resize callback
+            let mut window_clone = self.window.clone();
+            window_clone.resize_callback(move |_, x, y, w, h| {
+                // Update the tabs size when the window is resized
+                tabs_callback.resize(0, content_y, w, h - content_y);
+                app::redraw();
+            });
             
             // Connect the transfer panel with file browsers
             self.transfer_panel.set_callback(move |source_is_local, source_path, dest_path| {
@@ -536,11 +606,26 @@ pub mod main_window {
             
             // Local browser file selection callback
             let transfer_panel_clone = transfer_panel.clone();
+            let image_view_clone = image_view.clone();
             self.local_browser.set_callback(move |path, is_dir| {
                 if !is_dir {
                     println!("Local file selected: {}", path.display());
+                    
+                    // Set the source path for transfer
                     if let Ok(mut panel) = transfer_panel_clone.lock() {
-                        panel.set_source_path(path, true);
+                        panel.set_source_path(path.clone(), true);
+                    }
+                    
+                    // Check if file is an image and preview it
+                    if is_image_file(&path) {
+                        println!("Loading image for preview: {}", path.display());
+                        if let Ok(mut view) = image_view_clone.lock() {
+                            if view.load_image(&path) {
+                                println!("Successfully loaded image preview");
+                            } else {
+                                println!("Failed to load image preview");
+                            }
+                        }
                     }
                 }
             });
@@ -548,14 +633,37 @@ pub mod main_window {
             // Remote browser file selection callback 
             let transfer_panel_clone = transfer_panel.clone();
             let remote_browser_clone = self.remote_browser_ref.clone();
+            let image_view_clone = image_view.clone();
             
             // First get a lock on the remote browser to set its callback
             if let Ok(mut remote_browser) = remote_browser_clone.lock() {
                 remote_browser.set_callback(move |path, is_dir| {
                     if !is_dir {
                         println!("Remote file selected: {}", path.display());
+                        
+                        // Set source path for transfer
                         if let Ok(mut panel) = transfer_panel_clone.lock() {
-                            panel.set_source_path(path, false);
+                            panel.set_source_path(path.clone(), false);
+                        }
+                        
+                        // For remote files, we need to download them first before preview
+                        if is_image_file(&path) {
+                            println!("Selected a remote image: {}", path.display());
+                            // Check if we have a local version of this file already
+                            if path.exists() {
+                                println!("Image exists locally, loading for preview");
+                                if let Ok(mut view) = image_view_clone.lock() {
+                                    if view.load_image(&path) {
+                                        println!("Successfully loaded remote image preview");
+                                    } else {
+                                        println!("Failed to load remote image preview");
+                                    }
+                                }
+                            } else {
+                                println!("Remote image not available locally for preview");
+                                // You would need to implement a temporary download function here
+                                // to fetch the file for preview
+                            }
                         }
                     }
                 });

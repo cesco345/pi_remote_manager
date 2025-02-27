@@ -10,7 +10,7 @@ pub mod file_browser {
         app,
         dialog, // Added for message dialogs
     };
-    
+    use std::path::Path;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
     
@@ -598,5 +598,17 @@ pub mod file_browser {
         {
             self.callback = Some(Box::new(callback));
         }
+
+        // Helper to check if a file is an image based on extension
+fn is_image_file(path: &Path) -> bool {
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        matches!(
+            ext.to_lowercase().as_str(),
+            "jpg" | "jpeg" | "png" | "gif" | "bmp" | "tiff" | "tif" | "webp"
+        )
+    } else {
+        false
+    }
+}
     }
 }
